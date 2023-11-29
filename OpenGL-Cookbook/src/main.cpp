@@ -2,6 +2,9 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
+#include <filesystem>
+
+#include <stb_image.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +88,7 @@ void main()
 	out_FragColor = vec4(color, 1.0);
 };
 )";
+
 
 void ShaderErrorCheck(GLuint shader, const char* type)
 {
@@ -202,6 +206,23 @@ int main()
 	//Render a wireframe on top of the solid image without z-fighting
 	glEnable(GL_POLYGON_OFFSET_LINE);
 	glPolygonOffset(-1.0f, -1.0f);
+
+	//Load an inmage as a 4-channel RGBA image
+	int w, h, comp;
+	const uint8_t* img = stbi_load("../res/AL_Bistro/Cobble_02B_Diff.png", &w, &h, &comp, 4);
+	std::cout << comp;
+	GLuint texture;
+	glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+	glTextureParameteri(texture, GL_TEXTURE_MAX_LEVEL, 0);
+	glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTextureStorage2D(texture, 1, GL_RGBA, w, h);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glTextureSubImage2D(texture, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img);
+	glBindTextures(0, 1, &texture);
+
+	stbi_image_free((void*)img);
+
 
 	while (!glfwWindowShouldClose(window))
 	{

@@ -51,6 +51,7 @@ project "OpenGL-Cookbook"
 	includedirs
 	{
 		"%{prj.name}/src",
+		-- "%{prj.name}/res",
 		"%{IncludeDir.GLFW}",
 		"%{IncludeDir.Glad}",
 		"%{IncludeDir.ImGui}",
