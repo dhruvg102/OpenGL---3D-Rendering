@@ -5,6 +5,7 @@ A Rendering Showcase built to learn about OpenGL and Graphics Programming.
 
 Resources:
 * Models downloaded from Morgan McGuire's [Computer Graphics Archive](https://casual-effects.com/data)
+* Patched materials for the Bistro mesh from [Sergey Kosarevsky's Github](https://github.com/corporateshark/bistro_materials)
 
 Dependencies:  
 * GLFW
