@@ -3,6 +3,9 @@
 # About
 A Rendering Showcase built to learn about OpenGL and Graphics Programming.
 
+Resources:
+* Models downloaded from Morgan McGuire's [Computer Graphics Archive](https://casual-effects.com/data)
+
 Dependencies:  
 * GLFW
 * GLAD
