@@ -26,6 +26,7 @@ endif()
 
 include_directories(
     include/
+    src/Utility/
     lib/
     lib/assimp/include/
     lib/glad/include/
@@ -47,11 +48,14 @@ file(
 file(
     GLOB PROJECT_HEADERS
     include/*.hpp
+    include/*.h
+    src/Utility/*.h
 )
 
 file(
     GLOB PROJECT_SOURCES
     src/*.cpp
+    src/Utility/*.cpp
 )
 
 file(

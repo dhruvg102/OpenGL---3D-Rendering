@@ -7,19 +7,24 @@
 #include <assimp/cimport.h>
 #include <assimp/version.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
+
+#include "GLShader.cpp"
+
 #include <stdio.h>
 #include <stdlib.h>
 
 #include <vector>
-#include <iostream>
+
 using glm::mat4;
 using glm::vec3;
+using glm::vec2;
 
 //Struct to Pass in Values to shader through uniform buffer
 struct PerFrameData
 {
 	mat4 MVP;			// model - view - projection matrix
-	int isWireframe;	// set color of wireframe rendering 
 };
 
 //GLSL Code For the Vertex Shader
@@ -49,30 +54,6 @@ void main()
 	out_FragColor = vec4(color, 1.0);
 };
 )";
-
-void ShaderErrorCheck(GLuint shader, const char* type)
-{
-	GLint isCompiled = 0;
-	glGetShaderiv(shader, GL_COMPILE_STATUS, &isCompiled);
-	if (isCompiled == GL_FALSE)
-	{
-		GLint maxLength = 0;
-		glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLength);
-
-		// The maxLength includes the NULL character
-		std::vector<GLchar> errorLog(maxLength);
-		glGetShaderInfoLog(shader, maxLength, &maxLength, &errorLog[0]);
-
-		printf(type);
-		for (unsigned int i = 0; i < maxLength; i++) {
-			std::cout << errorLog[i];
-		}
-		// Provide the infolog in whatever manor you deem best.
-		// Exit with failure.
-		glDeleteShader(shader); // Don't leak the shader.
-		return;
-	}
-}
 
 int main(void)
 {
@@ -117,53 +98,31 @@ int main(void)
 	gladLoadGL();
 	glfwSwapInterval(1);
 
-
-	//Compiling and Linking shader to a program
-	const GLuint shaderVertex = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(shaderVertex, 1, &shaderCodeVertex, nullptr);
-	glCompileShader(shaderVertex);
-	//ShaderErrorCheck(shaderVertex, "Vertex");
-
-	const GLuint shaderFragment = glCreateShader(GL_FRAGMENT_SHADER);
-	glShaderSource(shaderFragment, 1, &shaderCodeFragment, nullptr);
-	glCompileShader(shaderFragment);
-	//ShaderErrorCheck(shaderFragment, "Fragment");
-
-	const GLuint program = glCreateProgram();
-	glAttachShader(program, shaderVertex);
-	glAttachShader(program, shaderFragment);
-	glLinkProgram(program);
-
-	//Simple Empty
-	//All the vertext Data is Inside the vertex shade
-	GLuint vao;
-	glCreateVertexArrays(1, &vao);
-	glBindVertexArray(vao);
+	GLShader shaderVertex("../res/shaders/GL02.vert");
+	GLShader shaderGeometry("../res/shaders/GL02.geom");
+	GLShader shaderFragment("../res/shaders/GL02.frag");
+	GLProgram program(shaderVertex, shaderGeometry, shaderFragment);
+	program.useProgram();
 
 	//Buffer object to hold the data using DSA functions
-	const GLsizeiptr kBufferSize = sizeof(PerFrameData);
+	const GLsizeiptr kUniformBufferSize = sizeof(PerFrameData);
 	GLuint perFrameDataBuffer;
 	glCreateBuffers(1, &perFrameDataBuffer);
 
 	//GL_DYNAMIC_STORAGE_BIT tells OpenGL that the
 	//content of the data store might be updated after
 	//the creation through calls to glBufferSubData()
-	glNamedBufferStorage(perFrameDataBuffer, kBufferSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
+	glNamedBufferStorage(perFrameDataBuffer, kUniformBufferSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
 	//Binds a range withing the buffer oject to an index buffer target
 	//The buffer is bout to the indexed target 0, this will be used inside our shader
-	glBindBufferRange(GL_UNIFORM_BUFFER, 0, perFrameDataBuffer, 0, kBufferSize);
+	glBindBufferRange(GL_UNIFORM_BUFFER, 0, perFrameDataBuffer, 0, kUniformBufferSize);
 
 	//Set Clear Color
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 
 	//Render a wireframe on top of the solid image without z-fighting
 	glEnable(GL_DEPTH_TEST);
-	glEnable(GL_POLYGON_OFFSET_LINE);
-	glPolygonOffset(-1.0f, -1.0f);
-
-	GLuint meshData;
-	glCreateBuffers(1, &meshData);
 
 	//Ask library to convert geometric primitives into triangles
 	const aiScene* scene = aiImportFile("../res/rubber_duck/scene.gltf", aiProcess_Triangulate);
@@ -175,33 +134,67 @@ int main(void)
 		exit(255);
 	}
 
-	//Convert 3D loaded scene into a data format to upload to OpenGL
-	std::vector<vec3> positions;
-	const aiMesh* mesh = scene->mMeshes[0];
-	for (unsigned int i = 0; i != mesh->mNumFaces; i++)
+	struct VertexData
 	{
-		const aiFace& face = mesh->mFaces[i];
-		const unsigned int idx[3] = { face.mIndices[0], face.mIndices[1], face.mIndices[2] };
-		//Flatten All indices and store only the vertex position
-		for (int j = 0; j != 3; j++)
-		{
-			const aiVector3D v = mesh->mVertices[idx[j]];
-			positions.push_back(vec3(v.x, v.z, v.y));
-		}
+		vec3 pos;
+		vec2 tc;
+	};
+
+	//Convert 3D loaded scene into a data format to upload to OpenGL
+	const aiMesh* mesh = scene->mMeshes[0];
+	std::vector<VertexData> vertices;
+	for (unsigned i = 0; i != mesh->mNumVertices; i++)
+	{
+		const aiVector3D v = mesh->mVertices[i];
+		const aiVector3D t = mesh->mTextureCoords[0][i];
+		vertices.push_back({ vec3(v.x, v.z, v.y), vec2(t.x, t.y) });
 	}
-	//Deallocate The Scene Pointer
+	std::vector<unsigned int> indices;
+	for (unsigned i = 0; i != mesh->mNumFaces; i++)
+	{
+		for (unsigned j = 0; j != 3; j++)
+			indices.push_back(mesh->mFaces[i].mIndices[j]);
+	}
+	
+	//Deallocate the scene pointer
 	aiReleaseImport(scene);
 
-	//Upload content of positions[] to OpenGL Buffer
-	glNamedBufferStorage(meshData, sizeof(vec3) * positions.size(), positions.data(), 0);
+	const size_t kSizeIndices = sizeof(unsigned int) * indices.size();
+	const size_t kSizeVertices = sizeof(VertexData) * vertices.size();
 
-	glVertexArrayVertexBuffer(vao, 0, meshData, 0, sizeof(vec3));
-	glEnableVertexArrayAttrib(vao, 0);
-	glVertexArrayAttribFormat(vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
-	glVertexArrayAttribBinding(vao, 0, 0);
+	// indices
+	GLuint dataIndices;
+	glCreateBuffers(1, &dataIndices);
 
-	//Save the number the of vertices
-	const int numVertices = static_cast<int>(positions.size());
+	//Upload content of indices to OpenGL Buffer
+	glNamedBufferStorage(dataIndices, kSizeIndices, indices.data(), 0);
+
+	GLuint vao;
+	glCreateVertexArrays(1, &vao);
+	glBindVertexArray(vao);
+	glVertexArrayElementBuffer(vao, dataIndices);
+
+	// vertices
+	GLuint dataVertices;
+	glCreateBuffers(1, &dataVertices);
+	glNamedBufferStorage(dataVertices, kSizeVertices, vertices.data(), 0);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, dataVertices);
+
+	// texture
+	int w, h, comp;
+	const uint8_t* img = stbi_load("../res/rubber_duck/textures/Duck_baseColor.png", &w, &h, &comp, 3);
+
+	GLuint texture;
+	glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+	glTextureParameteri(texture, GL_TEXTURE_MAX_LEVEL, 0);
+	glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTextureStorage2D(texture, 1, GL_RGB8, w, h);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glTextureSubImage2D(texture, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, img);
+	glBindTextures(0, 1, &texture);
+
+	stbi_image_free((void*)img);
 
 	while (!glfwWindowShouldClose(window))
 	{
@@ -224,36 +217,22 @@ int main(void)
 		//Projection Matrix
 		const mat4 p = glm::perspective(45.0f, ratio, 0.1f, 1000.0f);
 
-		PerFrameData perFrameData = { 
-			p * m,
-			false };
+		PerFrameData perFrameData = { p * m };
 
 		//Render Normalyy
-		glUseProgram(program);
-		glNamedBufferSubData(perFrameDataBuffer, 0, kBufferSize, &perFrameData);
-
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		glDrawArrays(GL_TRIANGLES, 0, numVertices);
-
-		//Render Wireframe
-		perFrameData.isWireframe = true;
-		glNamedBufferSubData(perFrameDataBuffer, 0, kBufferSize, &perFrameData);
-
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-		glDrawArrays(GL_TRIANGLES, 0, numVertices);
-
+		glNamedBufferSubData(perFrameDataBuffer, 0, kUniformBufferSize, &perFrameData);
+		glDrawElements(GL_TRIANGLES, static_cast<unsigned>(indices.size()), GL_UNSIGNED_INT, nullptr);
 		//Swapping with the Back Buffer to view the render
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
 
 	//Cleaning Up
-	glDeleteBuffers(1, &meshData);
+	glDeleteBuffers(1, &dataIndices);
+	glDeleteBuffers(1, &dataVertices);
 	glDeleteBuffers(1, &perFrameDataBuffer);
-	glDeleteProgram(program);
-	glDeleteShader(shaderFragment);
-	glDeleteShader(shaderVertex);
 	glDeleteVertexArrays(1, &vao);
+
 
 	glfwDestroyWindow(window);
 	glfwTerminate();
