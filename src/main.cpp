@@ -9,8 +9,15 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb/stb_image_write.h>
 
-#include "GLShader.cpp"
+#include "Utility/GLShader.cpp"
+#include "Utility/UtilsMath.h"
+#include "Bitmap.h"
+#include "Utility/UtilsCubemap.cpp"
+
+#include "Utility/debug.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,42 +25,17 @@
 #include <vector>
 
 using glm::mat4;
-using glm::vec3;
 using glm::vec2;
-
+using glm::vec3;
+using glm::vec4;
+using glm::ivec2;
 //Struct to Pass in Values to shader through uniform buffer
 struct PerFrameData
 {
+	mat4 model;
 	mat4 MVP;			// model - view - projection matrix
+	vec4 camera;
 };
-
-//GLSL Code For the Vertex Shader
-static const char* shaderCodeVertex = R"(
-#version 460 core
-layout(std140, binding = 0) uniform PerFrameData
-{
-	uniform mat4 MVP;
-	uniform int isWireframe;
-};
-layout (location=0) in vec3 pos;
-layout (location=0) out vec3 color;
-void main()
-{
-	gl_Position = MVP * vec4(pos, 1.0);
-	color = isWireframe > 0 ? vec3(0.0f) : pos.xyz;
-}
-)";
-
-//GLSL Code for the Fragment Shader
-static const char* shaderCodeFragment = R"(
-#version 460 core
-layout (location=0) in vec3 color;
-layout (location=0) out vec4 out_FragColor;
-void main()
-{
-	out_FragColor = vec4(color, 1.0);
-};
-)";
 
 int main(void)
 {
@@ -98,11 +80,15 @@ int main(void)
 	gladLoadGL();
 	glfwSwapInterval(1);
 
-	GLShader shaderVertex("../res/shaders/GL02.vert");
-	GLShader shaderGeometry("../res/shaders/GL02.geom");
-	GLShader shaderFragment("../res/shaders/GL02.frag");
-	GLProgram program(shaderVertex, shaderGeometry, shaderFragment);
-	program.useProgram();
+	initDebug();
+
+	GLShader shdModelVertex("../res/shaders/GL03_duck.vert");
+	GLShader shdModelFragment("../res/shaders/GL03_duck.frag");
+	GLProgram progModel(shdModelVertex, shdModelFragment);
+
+	GLShader shdCubeVertex("../res/shaders/GL03_cube.vert");
+	GLShader shdCubeFragment("../res/shaders/GL03_cube.frag");
+	GLProgram progCube(shdCubeVertex, shdCubeFragment);
 
 	//Buffer object to hold the data using DSA functions
 	const GLsizeiptr kUniformBufferSize = sizeof(PerFrameData);
@@ -137,6 +123,7 @@ int main(void)
 	struct VertexData
 	{
 		vec3 pos;
+		vec3 n;
 		vec2 tc;
 	};
 
@@ -146,8 +133,9 @@ int main(void)
 	for (unsigned i = 0; i != mesh->mNumVertices; i++)
 	{
 		const aiVector3D v = mesh->mVertices[i];
+		const aiVector3D n = mesh->mNormals[i];
 		const aiVector3D t = mesh->mTextureCoords[0][i];
-		vertices.push_back({ vec3(v.x, v.z, v.y), vec2(t.x, t.y) });
+		vertices.push_back({  vec3(v.x, v.z, v.y), vec3(n.x, n.y, n.z), vec2(t.x, t.y) });
 	}
 	std::vector<unsigned int> indices;
 	for (unsigned i = 0; i != mesh->mNumFaces; i++)
@@ -180,21 +168,58 @@ int main(void)
 	glNamedBufferStorage(dataVertices, kSizeVertices, vertices.data(), 0);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, dataVertices);
 
-	// texture
-	int w, h, comp;
-	const uint8_t* img = stbi_load("../res/rubber_duck/textures/Duck_baseColor.png", &w, &h, &comp, 3);
-
-	GLuint texture;
-	glCreateTextures(GL_TEXTURE_2D, 1, &texture);
-	glTextureParameteri(texture, GL_TEXTURE_MAX_LEVEL, 0);
-	glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTextureStorage2D(texture, 1, GL_RGB8, w, h);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTextureSubImage2D(texture, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, img);
-	glBindTextures(0, 1, &texture);
 
-	stbi_image_free((void*)img);
+
+	// texture
+	GLuint texture;
+	{
+		int w, h, comp;
+		const uint8_t* img = stbi_load("../res/rubber_duck/textures/Duck_baseColor.png", &w, &h, &comp, 3);
+
+		glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+		glTextureParameteri(texture, GL_TEXTURE_MAX_LEVEL, 0);
+		glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTextureStorage2D(texture, 1, GL_RGB8, w, h);
+		glTextureSubImage2D(texture, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, img);
+		glBindTextures(0, 1, &texture);
+
+		stbi_image_free((void*)img);
+	}
+
+	// cube map
+	GLuint cubemapTex;
+	{
+		int w, h, comp;
+		const float* img = stbi_loadf("../res/piazza_bologni_1k.hdr", &w, &h, &comp, 3);
+		Bitmap in(w, h, comp, eBitmapFormat_Float, img);
+		Bitmap out = convertEquirectangularMapToVerticalCross(in);
+		stbi_image_free((void*)img);
+
+		stbi_write_hdr("screenshot.hdr", out.w_, out.h_, out.comp_, (const float*)out.data_.data());
+
+		Bitmap cubemap = convertVerticalCrossToCubeMapFaces(out);
+
+		glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &cubemapTex);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_BASE_LEVEL, 0);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_MAX_LEVEL, 0);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_MAX_LEVEL, 0);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTextureParameteri(cubemapTex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTextureStorage2D(cubemapTex, 1, GL_RGB32F, cubemap.w_, cubemap.h_);
+		const uint8_t* data = cubemap.data_.data();
+
+		for (unsigned i = 0; i != 6; ++i)
+		{
+			glTextureSubImage3D(cubemapTex, 0, 0, 0, i, cubemap.w_, cubemap.h_, 1, GL_RGB, GL_FLOAT, data);
+			data += cubemap.w_ * cubemap.h_ * cubemap.comp_ * Bitmap::getBytesPerComponent(cubemap.fmt_);
+		}
+		glBindTextures(1, 1, &cubemapTex);
+	}
 
 	while (!glfwWindowShouldClose(window))
 	{
@@ -208,20 +233,31 @@ int main(void)
 		glViewport(0, 0, width, height);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		//Model Matrix Calculated as a rotation around the diagonal (1,1,1)
-		const mat4 m = glm::rotate(
-			glm::translate(mat4(1.0f), vec3(0.0f, -0.5f, -1.5f)),
-			(float)glfwGetTime(), 
-			vec3(0.0f, 1.0f, 0.0f));
+		
 
 		//Projection Matrix
 		const mat4 p = glm::perspective(45.0f, ratio, 0.1f, 1000.0f);
 
-		PerFrameData perFrameData = { p * m };
+		{
+			//Model Matrix Calculated as a rotation around the diagonal (1,1,1)
+			const mat4 m = glm::rotate(
+				glm::translate(mat4(1.0f), vec3(0.0f, -0.5f, -1.5f)),
+				(float)glfwGetTime(),
+				vec3(0.0f, 1.0f, 0.0f));
+			const PerFrameData perFrameData = {  m,  p * m, vec4(0.0f) };
+			glNamedBufferSubData(perFrameDataBuffer, 0, kUniformBufferSize, &perFrameData);
+			progModel.useProgram();
+			glDrawElements(GL_TRIANGLES, static_cast<unsigned>(indices.size()), GL_UNSIGNED_INT, nullptr);
+		}
+		{
+			const mat4 m = glm::scale(mat4(1.0f), vec3(2.0f));
+			const PerFrameData perFrameData = { m,  p * m, vec4(0.0f) };
+			glNamedBufferSubData(perFrameDataBuffer, 0, kUniformBufferSize, &perFrameData);
+			progCube.useProgram();
+			glDrawArrays(GL_TRIANGLES, 0, 36);
+		}
 
-		//Render Normalyy
-		glNamedBufferSubData(perFrameDataBuffer, 0, kUniformBufferSize, &perFrameData);
-		glDrawElements(GL_TRIANGLES, static_cast<unsigned>(indices.size()), GL_UNSIGNED_INT, nullptr);
+		
 		//Swapping with the Back Buffer to view the render
 		glfwSwapBuffers(window);
 		glfwPollEvents();
