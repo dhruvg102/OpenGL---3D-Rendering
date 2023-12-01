@@ -1,5 +1,7 @@
 # OpenGL---3D-Rendering
 
+![duck](https://github.com/dhruvg102/OpenGL---3D-Rendering/blob/main/Showcase/Showcase%20-1.png?raw=true)
+
 # About
 A Rendering Showcase built to learn about OpenGL and Graphics Programming.
 
