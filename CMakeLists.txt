@@ -26,6 +26,7 @@ endif()
 
 include_directories(
     include/
+    lib/
     lib/assimp/include/
     lib/glad/include/
     lib/glfw/include/
